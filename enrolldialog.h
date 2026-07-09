@@ -13,7 +13,6 @@ class QLineEdit;
 class QPushButton;
 class QTimer;
 
-// Canlı kameradan bir kareyi yakalayıp isimle kaydetmek için basit diyalog.
 class EnrollDialog : public QDialog
 {
     Q_OBJECT
@@ -40,4 +39,4 @@ private:
     QTimer      *m_previewTimer = nullptr;
 };
 
-#endif // ENROLLDIALOG_H
+#endif

@@ -17,7 +17,6 @@
 
 static const QList<int> CAMERA_PORTS = {5000, 5001, 5002, 5003};
 
-// Model klasörünü çöz: önce exe yanındaki "models", sonra C:/kamera_proje/models
 static QString resolveModelsDir()
 {
     const QStringList candidates = {
@@ -27,10 +26,9 @@ static QString resolveModelsDir()
     for (const QString &d : candidates)
         if (QFile::exists(d + "/face_detection_yunet_2023mar.onnx"))
             return d;
-    return candidates.first();   // bulunamadıysa motor anlamlı hata verecek
+    return candidates.first();
 }
 
-// ─── Yardımcı: gridLayout'un TÜM içeriğini temizler ──────────────────────────
 static void clearGridLayout(QGridLayout *layout, QList<QWidget*> &placeholders)
 {
     while (layout->count() > 0) {
@@ -39,9 +37,9 @@ static void clearGridLayout(QGridLayout *layout, QList<QWidget*> &placeholders)
         QWidget *w = item->widget();
         if (w) {
             if (qobject_cast<CameraFeed*>(w))
-                w->hide();          // Feed: gizle, silme
+                w->hide();
             else
-                delete w;           // Placeholder: sil
+                delete w;
         }
         delete item;
     }
@@ -79,11 +77,9 @@ MainWindow::MainWindow(QWidget *parent)
     connect(camChangeDebounce, &QTimer::timeout,
             this, &MainWindow::refreshLocalCameras);
 
-    // Yüz motoru + araç çubuğu (feed'lerden ÖNCE kurulmalı: bağlantı için)
     setupFaceEngine();
     setupToolbar();
 
-    // UDP feed'ler
     for (int port : CAMERA_PORTS) {
         CameraFeed *feed = new CameraFeed(port, gridWidget);
         feed->setFaceEngine(m_faceEngine, m_nextFeedId++);
@@ -105,20 +101,16 @@ MainWindow::MainWindow(QWidget *parent)
             this, &MainWindow::onCameraSelected);
 }
 
-// ─── Yüz Motoru (ayrı thread) ─────────────────────────────────────────────────
 void MainWindow::setupFaceEngine()
 {
     m_faceThread = new QThread(this);
-    m_faceEngine = new FaceEngine(resolveModelsDir());   // parent YOK (moveToThread)
+    m_faceEngine = new FaceEngine(resolveModelsDir());
     m_faceEngine->moveToThread(m_faceThread);
 
-    // Thread bitince motoru güvenle sil (Qt'nin önerdiği desen)
     connect(m_faceThread, &QThread::finished, m_faceEngine, &QObject::deleteLater);
 
-    // Kişi listesini önbelleğe al (Yönet diyaloğu için)
     connect(m_faceEngine, &FaceEngine::personListReady, this,
             [this](const QStringList &names) { m_knownNames = names; });
-    // DB değişince listeyi tazele
     connect(m_faceEngine, &FaceEngine::databaseChanged, this, [this](int) {
         QMetaObject::invokeMethod(m_faceEngine, "requestPersonList",
                                   Qt::QueuedConnection);
@@ -126,7 +118,6 @@ void MainWindow::setupFaceEngine()
 
     m_faceThread->start();
 
-    // Başlangıç kişi listesini iste
     QMetaObject::invokeMethod(m_faceEngine, "requestPersonList",
                               Qt::QueuedConnection);
 }
@@ -153,7 +144,7 @@ void MainWindow::onFaceToggled(bool on)
         QMessageBox::warning(this, "Yüz Tanıma",
             "Modeller yüklenemedi:\n\n" + m_faceEngine->lastError() +
             "\n\nModel dosyalarını 'models' klasörüne koyun.");
-        m_faceToggleAct->setChecked(false);   // onFaceToggled tekrar tetiklenir (false)
+        m_faceToggleAct->setChecked(false);
         return;
     }
     m_faceToggleAct->setText(on ? "Yüz Tanıma: Açık" : "Yüz Tanıma: Kapalı");
@@ -190,7 +181,6 @@ void MainWindow::onManageClicked()
     }
 }
 
-// ─── Yerel Kamera Yönetimi ────────────────────────────────────────────────────
 void MainWindow::refreshLocalCameras()
 {
     const QList<QCameraDevice> cameras = QMediaDevices::videoInputs();
@@ -203,7 +193,6 @@ void MainWindow::refreshLocalCameras()
     for (const QCameraDevice &cam : cameras)
         newIds.append(QString::fromLatin1(cam.id()));
 
-    // Bağlantısı kesilen kameraları kaldır
     for (auto it = existing.begin(); it != existing.end(); ++it) {
         if (!newIds.contains(it.key())) {
             CameraFeed *feed = it.value();
@@ -214,13 +203,11 @@ void MainWindow::refreshLocalCameras()
         }
     }
 
-    // Yeni kameralar
     for (const QCameraDevice &cam : cameras) {
         QString id = QString::fromLatin1(cam.id());
         if (!existing.contains(id)) {
             CameraFeed *feed = new CameraFeed(cam, gridWidget);
             feed->setFaceEngine(m_faceEngine, m_nextFeedId++);
-            // Tanıma şu an açıksa yeni kamerada da aç
             if (m_faceToggleAct && m_faceToggleAct->isChecked())
                 feed->setFaceRecognition(true);
             localFeeds.append(feed);
@@ -228,7 +215,6 @@ void MainWindow::refreshLocalCameras()
         }
     }
 
-    // Yerel kameralar önce, tüm UDP feed'ler her zaman dahil
     cameraFeeds.clear();
     cameraFeeds.append(localFeeds);
     cameraFeeds.append(udpFeeds);
@@ -258,7 +244,6 @@ void MainWindow::rebuildComboBox()
     comboBox->blockSignals(false);
 }
 
-// ─── Izgara Güncelleme ────────────────────────────────────────────────────────
 void MainWindow::updateGrid()
 {
     clearGridLayout(gridLayout, placeholders);
@@ -306,7 +291,6 @@ void MainWindow::updateGrid()
     }
 }
 
-// ─── Görüntüleme Modları ──────────────────────────────────────────────────────
 void MainWindow::showAll() { updateGrid(); }
 
 void MainWindow::showSingle(int index)
@@ -335,7 +319,6 @@ void MainWindow::onCameraSelected(int index)
 
 MainWindow::~MainWindow()
 {
-    // Worker thread'i düzgün durdur (motor finished→deleteLater ile silinir)
     if (m_faceThread) {
         m_faceThread->quit();
         m_faceThread->wait();

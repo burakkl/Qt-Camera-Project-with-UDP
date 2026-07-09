@@ -23,7 +23,6 @@ EnrollDialog::EnrollDialog(FaceEngine *engine,
 
     QVBoxLayout *lay = new QVBoxLayout(this);
 
-    // Hangi kameradan kaydedeceğiz?
     m_camSelect = new QComboBox(this);
     for (CameraFeed *f : m_feeds) {
         QString label = (f->udpPort() == -1)
@@ -33,7 +32,6 @@ EnrollDialog::EnrollDialog(FaceEngine *engine,
     }
     lay->addWidget(m_camSelect);
 
-    // Canlı önizleme
     m_preview = new QLabel(this);
     m_preview->setMinimumSize(440, 300);
     m_preview->setAlignment(Qt::AlignCenter);
@@ -42,7 +40,6 @@ EnrollDialog::EnrollDialog(FaceEngine *engine,
     m_preview->setText("Önizleme bekleniyor...");
     lay->addWidget(m_preview, 1);
 
-    // İsim + kaydet
     QHBoxLayout *row = new QHBoxLayout();
     m_nameEdit = new QLineEdit(this);
     m_nameEdit->setPlaceholderText("Kişinin adı");
@@ -62,14 +59,14 @@ EnrollDialog::EnrollDialog(FaceEngine *engine,
 
     m_previewTimer = new QTimer(this);
     connect(m_previewTimer, &QTimer::timeout, this, &EnrollDialog::updatePreview);
-    m_previewTimer->start(100);   // ~10 fps önizleme
+    m_previewTimer->start(100);
 }
 
 QImage EnrollDialog::currentSelectedFrame() const
 {
     const int idx = m_camSelect->currentIndex();
     if (idx < 0 || idx >= m_feeds.size()) return {};
-    return m_feeds[idx]->currentFrame();   // overlay'siz ham kare
+    return m_feeds[idx]->currentFrame();
 }
 
 void EnrollDialog::updatePreview()
@@ -91,7 +88,6 @@ void EnrollDialog::onCapture()
     m_status->setText("İşleniyor...");
     m_captureBtn->setEnabled(false);
 
-    // Worker thread'e gönder
     QMetaObject::invokeMethod(m_engine, "enrollFace", Qt::QueuedConnection,
                               Q_ARG(QString, name),
                               Q_ARG(QImage, img));

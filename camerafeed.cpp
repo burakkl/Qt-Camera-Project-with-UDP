@@ -10,8 +10,11 @@
 #include <QPainter>
 #include <QFontMetrics>
 #include <QRegularExpression>
+#include <QComboBox>
+#include <QResizeEvent>
+#include <QMap>
+#include <algorithm>
 
-// ─── UDP Constructor ───────────────────────────────────────────────────────────
 CameraFeed::CameraFeed(int port, QWidget *parent)
     : QWidget(parent)
     , mode(Mode::UDP)
@@ -38,11 +41,8 @@ CameraFeed::CameraFeed(int port, QWidget *parent)
     else
         qDebug() << "[UDP" << port << "] Dinleniyor.";
     connect(udpSocket, &QUdpSocket::readyRead, this, &CameraFeed::readData);
-
-    startNewSegment();
 }
 
-// ─── Yerel Kamera Constructor ──────────────────────────────────────────────────
 CameraFeed::CameraFeed(const QCameraDevice &device, QWidget *parent)
     : QWidget(parent)
     , mode(Mode::Local)
@@ -68,13 +68,11 @@ CameraFeed::CameraFeed(const QCameraDevice &device, QWidget *parent)
     connect(videoSink, &QVideoSink::videoFrameChanged,
             this, &CameraFeed::onLocalFrame);
 
-    startNewSegment();
     camera->start();
 
     qDebug() << "[LocalCam] Başlatıldı:" << device.description();
 }
 
-// ─── Kimlik ───────────────────────────────────────────────────────────────────
 QString CameraFeed::cameraDeviceId() const
 {
     if (mode == Mode::Local && camera)
@@ -94,7 +92,6 @@ int CameraFeed::udpPort() const
     return (mode == Mode::UDP) ? port : -1;
 }
 
-// ─── Yüz tanıma kurulumu ──────────────────────────────────────────────────────
 void CameraFeed::setFaceEngine(FaceEngine *engine, int feedId)
 {
     m_engine = engine;
@@ -110,22 +107,20 @@ void CameraFeed::setFaceRecognition(bool on)
     if (!on) {
         m_latestResults.clear();
         m_faceBusy = false;
-        // Üzerinde kutu kalmasın diye son kareyi temiz bas
         if (!m_lastFrame.isNull())
             liveLabel->setPixmap(QPixmap::fromImage(m_lastFrame));
     } else {
-        m_submitTimer.invalidate();   // hemen ilk kareyi gönderebil
+        m_submitTimer.invalidate();
     }
 }
 
 void CameraFeed::onFaceResults(int feedId, const QVector<FaceResult> &results)
 {
-    if (feedId != m_feedId) return;   // başka kameranın sonucu, bizi ilgilendirmez
+    if (feedId != m_feedId) return;
     m_latestResults = results;
     m_faceBusy = false;
 }
 
-// ─── UI Kurulumu ──────────────────────────────────────────────────────────────
 void CameraFeed::setupUI()
 {
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -135,7 +130,6 @@ void CameraFeed::setupUI()
     mainLayout->setContentsMargins(0, 0, 0, 0);
     mainLayout->setSpacing(0);
 
-    // ── Video alanı ─────────────────────────────────────────────────────────
     liveLabel = new QLabel(this);
     liveLabel->setAlignment(Qt::AlignCenter);
     liveLabel->setScaledContents(true);
@@ -144,7 +138,24 @@ void CameraFeed::setupUI()
     liveLabel->setStyleSheet("background-color: #000; color: #666; font-size: 11pt;");
     mainLayout->addWidget(liveLabel, 1);
 
-    // ── Kompakt kontrol çubuğu ──────────────────────────────────────────────
+    m_recBadge = new QLabel("● REC", liveLabel);
+    m_recBadge->setStyleSheet(
+        "QLabel { background: rgba(0,0,0,160); color: #e62828;"
+        " font-weight: bold; padding: 3px 8px; border-radius: 4px; }");
+    m_recBadge->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_recBadge->adjustSize();
+    m_recBadge->move(8, 8);
+    m_recBadge->hide();
+
+    m_clockLabel = new QLabel(liveLabel);
+    m_clockLabel->setStyleSheet(
+        "QLabel { background: rgba(0,0,0,140); color: #eaeaea;"
+        " font-weight: bold; padding: 2px 7px; border-radius: 4px; }");
+    m_clockLabel->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_clockLabel->setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
+    m_clockLabel->adjustSize();
+    m_clockLabel->move(8, 8);
+
     QWidget *ctrlBar = new QWidget(this);
     ctrlBar->setFixedHeight(30);
     ctrlBar->setStyleSheet("background-color: #1c1c1c;");
@@ -152,6 +163,20 @@ void CameraFeed::setupUI()
     QHBoxLayout *ctrlLayout = new QHBoxLayout(ctrlBar);
     ctrlLayout->setContentsMargins(4, 3, 4, 3);
     ctrlLayout->setSpacing(4);
+
+    motionDot = new QLabel(ctrlBar);
+    motionDot->setFixedSize(14, 14);
+    motionDot->setStyleSheet("background:#555; border-radius:7px;");
+    motionDot->setToolTip("Hareket durumu");
+
+    recordBtn = new QPushButton("⏺", ctrlBar);
+    recordBtn->setFixedSize(26, 22);
+    recordBtn->setCheckable(true);
+    recordBtn->setToolTip("Kaydı elle başlat (hareketten bağımsız)");
+    recordBtn->setStyleSheet(
+        "QPushButton{background:#2a2a2a;color:#ddd;border:none;border-radius:3px;}"
+        "QPushButton:hover{background:#3a3a3a;}"
+        "QPushButton:checked{background:#c0392b;color:#fff;}");
 
     pauseBtn = new QPushButton("⏸", ctrlBar);
     pauseBtn->setFixedSize(26, 22);
@@ -173,6 +198,8 @@ void CameraFeed::setupUI()
     liveBtn->setFixedHeight(22);
     liveBtn->setVisible(false);
 
+    ctrlLayout->addWidget(motionDot);
+    ctrlLayout->addWidget(recordBtn);
     ctrlLayout->addWidget(pauseBtn);
     ctrlLayout->addWidget(slider, 1);
     ctrlLayout->addWidget(timeEdit);
@@ -180,16 +207,69 @@ void CameraFeed::setupUI()
     ctrlLayout->addWidget(liveBtn);
 
     mainLayout->addWidget(ctrlBar);
+
+    faceBar = new QWidget(this);
+    faceBar->setFixedHeight(28);
+    faceBar->setStyleSheet("background-color:#181818;");
+
+    QHBoxLayout *fb = new QHBoxLayout(faceBar);
+    fb->setContentsMargins(6, 2, 6, 2);
+    fb->setSpacing(5);
+
+    QLabel *fbLabel = new QLabel("Yüz:", faceBar);
+    fbLabel->setStyleSheet("color:#bbb;");
+
+    m_personCombo = new QComboBox(faceBar);
+    m_personCombo->setMinimumWidth(120);
+    m_personCombo->setStyleSheet(
+        "QComboBox{background:#2a2a2a;color:#eee;border:1px solid #3a3a3a;"
+        "border-radius:3px;padding:1px 4px;}");
+
+    m_prevFaceBtn = new QPushButton("◀ Önceki", faceBar);
+    m_nextFaceBtn = new QPushButton("Sonraki ▶", faceBar);
+    for (QPushButton *b : {m_prevFaceBtn, m_nextFaceBtn}) {
+        b->setFixedHeight(22);
+        b->setStyleSheet(
+            "QPushButton{background:#2a2a2a;color:#ddd;border:none;"
+            "border-radius:3px;padding:0 8px;}"
+            "QPushButton:hover{background:#3a3a3a;}"
+            "QPushButton:disabled{color:#666;}");
+    }
+
+    m_faceJumpInfo = new QLabel(faceBar);
+    m_faceJumpInfo->setStyleSheet("color:#888;");
+
+    fb->addWidget(fbLabel);
+    fb->addWidget(m_personCombo);
+    fb->addWidget(m_prevFaceBtn);
+    fb->addWidget(m_nextFaceBtn);
+    fb->addWidget(m_faceJumpInfo);
+    fb->addStretch(1);
+
+    faceBar->setVisible(false);
+    mainLayout->addWidget(faceBar);
 }
 
 void CameraFeed::setupTimers()
 {
     segmentTimer = new QTimer(this);
     connect(segmentTimer, &QTimer::timeout, this, &CameraFeed::newSegment);
-    segmentTimer->start(60 * 1000);
+
+    recordWatchdog = new QTimer(this);
+    connect(recordWatchdog, &QTimer::timeout, this, &CameraFeed::recordWatchdogTick);
 
     playbackTimer = new QTimer(this);
     connect(playbackTimer, &QTimer::timeout, this, &CameraFeed::nextPlaybackFrame);
+
+    m_clockTimer = new QTimer(this);
+    m_clockTimer->setInterval(1000);
+    connect(m_clockTimer, &QTimer::timeout, this, [this]{
+        if (!m_clockLabel) return;
+        m_clockLabel->setText(QDateTime::currentDateTime().toString("HH:mm:ss"));
+        m_clockLabel->adjustSize();
+        m_clockLabel->move(liveLabel->width() - m_clockLabel->width() - 8, 8);
+    });
+    m_clockTimer->start();
 }
 
 void CameraFeed::setupSignals()
@@ -199,16 +279,17 @@ void CameraFeed::setupSignals()
     connect(pauseBtn, &QPushButton::clicked,   this, &CameraFeed::onPauseClicked);
     connect(slider,   &QSlider::valueChanged,  this, &CameraFeed::onSliderChanged);
     connect(timeEdit, &QTimeEdit::timeChanged, this, &CameraFeed::onTimeChanged);
+    connect(recordBtn, &QPushButton::toggled,  this, &CameraFeed::onRecordButtonToggled);
+    connect(m_prevFaceBtn, &QPushButton::clicked, this, &CameraFeed::onPrevFace);
+    connect(m_nextFaceBtn, &QPushButton::clicked, this, &CameraFeed::onNextFace);
 }
 
-// ─── UDP Datagram ─────────────────────────────────────────────────────────────
 void CameraFeed::readData()
 {
     while (udpSocket->hasPendingDatagrams()) {
         auto datagram = udpSocket->receiveDatagram();
         auto data     = datagram.data();
 
-        // TEŞHİS: bu porta gönderen her farklı IP'yi bir kez logla
         QString senderKey = datagram.senderAddress().toString()
                             + ":" + QString::number(datagram.senderPort());
         if (!seenSenders.contains(senderKey)) {
@@ -221,7 +302,7 @@ void CameraFeed::readData()
         }
 
         QImage image;
-        if (!image.loadFromData(data)) continue;   // çözülemeyen kareyi atla
+        if (!image.loadFromData(data)) continue;
 
         if (!wasEverActive) {
             wasEverActive = true;
@@ -229,15 +310,17 @@ void CameraFeed::readData()
             emit firstFrameReceived();
         }
 
+        updateMotion(image);
+
         if (!isPlayback) {
             renderFrame(image);
             maybeSubmit(image);
         }
-        saveFrame(data);   // ham JPEG baytları (yeniden kodlama yok)
+        if (m_recording)
+            saveFrame(data);
     }
 }
 
-// ─── Yerel Kamera Frame ───────────────────────────────────────────────────────
 void CameraFeed::onLocalFrame(const QVideoFrame &frame)
 {
     QVideoFrame f = frame;
@@ -256,24 +339,29 @@ void CameraFeed::onLocalFrame(const QVideoFrame &frame)
 
     if (image.isNull()) return;
 
+    updateMotion(image);
+
     if (!isPlayback) {
         renderFrame(image);
         maybeSubmit(image);
     }
 
-    QByteArray bytes;
-    QBuffer buffer(&bytes);
-    buffer.open(QIODevice::WriteOnly);
-    if (!image.save(&buffer, "JPEG", 60)) return;
-    saveFrame(bytes);
+    if (m_recording) {
+        QByteArray bytes;
+        QBuffer buffer(&bytes);
+        buffer.open(QIODevice::WriteOnly);
+        if (!image.save(&buffer, "JPEG", 60)) return;
+        saveFrame(bytes);
+    }
 }
 
-// ─── Görüntüyü ekrana bas (varsa yüz kutularını çiz) ──────────────────────────
 void CameraFeed::renderFrame(const QImage &img)
 {
-    m_lastFrame = img;   // enrollment/snapshot için ham kareyi sakla
+    m_lastFrame = img;
 
-    if (!m_faceEnabled || m_latestResults.isEmpty()) {
+    const bool haveFaces = m_faceEnabled && !m_latestResults.isEmpty();
+
+    if (!haveFaces) {
         liveLabel->setPixmap(QPixmap::fromImage(img));
         return;
     }
@@ -298,8 +386,8 @@ void CameraFeed::renderFrame(const QImage &img)
         p.drawRect(fr.box);
 
         QString label = fr.known
-            ? QString("%1  %%2").arg(fr.name).arg(int(fr.confidence * 100))
-            : fr.name;
+                            ? QString("%1  %%2").arg(fr.name).arg(int(fr.confidence * 100))
+                            : fr.name;
 
         QRect textRect = fm.boundingRect(label).adjusted(-6, -3, 6, 3);
         textRect.moveTopLeft(QPoint(fr.box.left(), fr.box.top() - textRect.height()));
@@ -315,7 +403,6 @@ void CameraFeed::renderFrame(const QImage &img)
     liveLabel->setPixmap(QPixmap::fromImage(canvas));
 }
 
-// ─── Motora kare gönder (kısıtlı + meşgulse atla) ─────────────────────────────
 void CameraFeed::maybeSubmit(const QImage &img)
 {
     if (!m_faceEnabled || !m_engine) return;
@@ -326,13 +413,11 @@ void CameraFeed::maybeSubmit(const QImage &img)
     m_faceBusy = true;
     m_submitTimer.restart();
 
-    // Worker thread'e queued çağrı; QImage implicit-shared olduğu için kopya ucuz
     QMetaObject::invokeMethod(m_engine, "processFrame", Qt::QueuedConnection,
                               Q_ARG(int, m_feedId),
                               Q_ARG(QImage, img));
 }
 
-// ─── Kayıt ────────────────────────────────────────────────────────────────────
 void CameraFeed::saveFrame(const QByteArray &data)
 {
     frameCount++;
@@ -345,9 +430,11 @@ void CameraFeed::saveFrame(const QByteArray &data)
         return;
     }
     file.write(data);
+    file.close();
+
+    logFaceAppearances();
 }
 
-// ─── startNewSegment ─────────────────────────────────────────────────────────
 void CameraFeed::startNewSegment()
 {
     QString ts = QDateTime::currentDateTime().toString("yyyyMMdd_HHmmss");
@@ -375,6 +462,7 @@ void CameraFeed::startNewSegment()
         qDebug() << "[startNewSegment] Kayıt:" << currentSegDir;
 
     frameCount = 0;
+    m_lastSeenFrame.clear();
     segmentFiles.enqueue(currentSegDir);
     if (segmentFiles.size() > MAX_SEGMENTS) {
         QString oldest = segmentFiles.dequeue();
@@ -382,18 +470,50 @@ void CameraFeed::startNewSegment()
     }
 }
 
-void CameraFeed::newSegment() { startNewSegment(); }
+void CameraFeed::newSegment()
+{
+    if (m_recording)
+        startNewSegment();
+}
 
-// ─── Oynatma ──────────────────────────────────────────────────────────────────
 void CameraFeed::collectPlaybackFrames()
 {
     playbackFrames.clear();
+    m_faceMarkers.clear();
+
     for (const QString &segDir : segmentFiles) {
+        const int segStart = playbackFrames.size();
+
         QDir dir(segDir);
         QStringList frames = dir.entryList({"*.jpg"}, QDir::Files, QDir::Name);
         for (const QString &frame : frames)
             playbackFrames.append(segDir + "/" + frame);
+
+        QFile log(segDir + "/faces.log");
+        if (log.open(QIODevice::ReadOnly | QIODevice::Text)) {
+            while (!log.atEnd()) {
+                const QByteArray line = log.readLine().trimmed();
+                if (line.isEmpty()) continue;
+                const int comma = line.indexOf(',');
+                if (comma <= 0) continue;
+
+                bool ok = false;
+                const int frameNo = line.left(comma).toInt(&ok);
+                if (!ok) continue;
+
+                const QString name = QString::fromUtf8(line.mid(comma + 1));
+                const QString fileName =
+                    QString("%1.jpg").arg(frameNo, 6, 10, QChar('0'));
+                const int pos = frames.indexOf(fileName);
+                if (pos >= 0)
+                    m_faceMarkers.append({ segStart + pos, name });
+            }
+            log.close();
+        }
     }
+
+    std::sort(m_faceMarkers.begin(), m_faceMarkers.end(),
+              [](const FaceMarker &a, const FaceMarker &b){ return a.index < b.index; });
 }
 
 void CameraFeed::showFrame(int index)
@@ -416,7 +536,9 @@ void CameraFeed::goToPlayback()
         return;
     }
     isPlayback = true;
-    startNewSegment();
+
+    populateFaceJump();
+    faceBar->setVisible(true);
 
     slider->setMaximum(playbackFrames.size() - 1);
     slider->setValue(0);
@@ -443,6 +565,7 @@ void CameraFeed::goToLive()
     timeEdit->setVisible(false);
     liveBtn->setVisible(false);
     watchBtn->setVisible(true);
+    faceBar->setVisible(false);
 }
 
 void CameraFeed::onWatchClicked() { goToPlayback(); }
@@ -493,6 +616,259 @@ void CameraFeed::nextPlaybackFrame()
     slider->setValue(playbackIndex);
     slider->blockSignals(false);
     showFrame(playbackIndex);
+}
+
+
+bool CameraFeed::detectMotionInFrame(const QImage &liveImg)
+{
+    QImage small = liveImg.scaled(MOTION_W, MOTION_H,
+                                  Qt::IgnoreAspectRatio,
+                                  Qt::FastTransformation)
+                       .convertToFormat(QImage::Format_Grayscale8);
+
+    if (m_prevGray.isNull()
+        || m_prevGray.width()  != small.width()
+        || m_prevGray.height() != small.height()) {
+        m_prevGray = small;
+        return false;
+    }
+
+    const int w = small.width();
+    const int h = small.height();
+    int changed = 0;
+    for (int y = 0; y < h; ++y) {
+        const uchar *cur = small.constScanLine(y);
+        const uchar *prv = m_prevGray.constScanLine(y);
+        for (int x = 0; x < w; ++x) {
+            int d = int(cur[x]) - int(prv[x]);
+            if (d < 0) d = -d;
+            if (d > MOTION_PIXEL_DELTA) ++changed;
+        }
+    }
+    m_prevGray = small;
+
+    const double frac = double(changed) / double(w * h);
+    return frac >= MOTION_AREA_FRAC;
+}
+
+void CameraFeed::updateMotion(const QImage &liveImg)
+{
+    if (m_motionSampleTimer.isValid()
+        && m_motionSampleTimer.elapsed() < MOTION_SAMPLE_MS)
+        return;
+    m_motionSampleTimer.restart();
+
+    const bool motion = detectMotionInFrame(liveImg);
+
+    if (motion) {
+        m_lastMotionTimer.restart();
+        if (!m_recording)
+            startRecording();
+    }
+
+    const bool show = motion
+                      || (m_lastMotionTimer.isValid()
+                          && m_lastMotionTimer.elapsed() < MOTION_HOLD_MS);
+    setMotionIndicator(show);
+}
+
+void CameraFeed::setMotionIndicator(bool active)
+{
+    const int s = active ? 1 : 0;
+    if (s == m_motionState) return;
+    m_motionState = s;
+    if (!motionDot) return;
+
+    if (active) {
+        motionDot->setStyleSheet("background:#27c93f; border-radius:7px;");
+        motionDot->setToolTip("Hareket algılandı");
+    } else {
+        motionDot->setStyleSheet("background:#9b2f2a; border-radius:7px;");
+        motionDot->setToolTip("Hareket yok");
+    }
+}
+
+void CameraFeed::startRecording()
+{
+    if (m_recording) return;
+    m_recording = true;
+
+    startNewSegment();
+    segmentTimer->start(60 * 1000);
+    recordWatchdog->start(1000);
+
+    liveLabel->setStyleSheet(
+        "QLabel { background-color: #000; border: 2px solid #c0392b; }");
+    if (m_recBadge) {
+        m_recBadge->show();
+        m_recBadge->raise();
+    }
+
+    updateRecordButton();
+    qDebug() << "[Rec] BAŞLADI:"
+             << (mode == Mode::UDP ? QString("port %1").arg(port)
+                                   : cameraDescription());
+}
+
+void CameraFeed::stopRecording()
+{
+    if (!m_recording) return;
+    m_recording = false;
+
+    segmentTimer->stop();
+    recordWatchdog->stop();
+
+    if (m_recBadge)      m_recBadge->hide();
+    liveLabel->setStyleSheet(
+        "background-color: #000; color: #666; font-size: 11pt;");
+
+    updateRecordButton();
+    qDebug() << "[Rec] DURDU.";
+}
+
+void CameraFeed::recordWatchdogTick()
+{
+    if (!m_recording || m_manualRecord) return;
+    if (m_lastMotionTimer.isValid()
+        && m_lastMotionTimer.elapsed() >= RECORD_LINGER_MS)
+        stopRecording();
+}
+
+void CameraFeed::onRecordButtonToggled(bool on)
+{
+    m_manualRecord = on;
+    if (on) {
+        startRecording();
+    } else {
+        if (!m_lastMotionTimer.isValid()
+            || m_lastMotionTimer.elapsed() >= RECORD_LINGER_MS)
+            stopRecording();
+    }
+    updateRecordButton();
+}
+
+void CameraFeed::updateRecordButton()
+{
+    if (!recordBtn) return;
+    recordBtn->blockSignals(true);
+    recordBtn->setChecked(m_manualRecord);
+    recordBtn->blockSignals(false);
+
+    recordBtn->setToolTip(
+        m_recording
+            ? (m_manualRecord ? "Elle kayıt sürüyor — durdurmak için tıkla"
+                              : "Hareketle kayıt sürüyor — elle kayda almak için tıkla")
+            : "Kaydı elle başlat (hareketten bağımsız)");
+}
+
+
+void CameraFeed::resizeEvent(QResizeEvent *event)
+{
+    QWidget::resizeEvent(event);
+    if (m_clockLabel) {
+        m_clockLabel->adjustSize();
+        m_clockLabel->move(liveLabel->width() - m_clockLabel->width() - 8, 8);
+    }
+    if (m_recBadge)
+        m_recBadge->move(8, 8);
+}
+
+void CameraFeed::logFaceAppearances()
+{
+    if (!m_faceEnabled) return;
+
+    for (const FaceResult &fr : m_latestResults) {
+        if (!fr.known || fr.name.isEmpty()) continue;
+
+        const int last = m_lastSeenFrame.value(fr.name, -1000000);
+        if (frameCount - last > FACE_REAPPEAR_GAP_FRAMES)
+            appendFaceLog(frameCount, fr.name);
+
+        m_lastSeenFrame[fr.name] = frameCount;
+    }
+}
+
+void CameraFeed::appendFaceLog(int frameNo, const QString &name)
+{
+    QString clean = name;
+    clean.replace(',', ' ').replace('\n', ' ').replace('\r', ' ');
+
+    QFile f(currentSegDir + "/faces.log");
+    if (f.open(QIODevice::Append | QIODevice::Text))
+        f.write(QString("%1,%2\n").arg(frameNo).arg(clean).toUtf8());
+}
+
+void CameraFeed::populateFaceJump()
+{
+    if (!m_personCombo) return;
+
+    m_personCombo->blockSignals(true);
+    m_personCombo->clear();
+
+    QMap<QString,int> counts;
+    for (const FaceMarker &m : m_faceMarkers)
+        counts[m.name] += 1;
+
+    for (auto it = counts.constBegin(); it != counts.constEnd(); ++it)
+        m_personCombo->addItem(QString("%1  (%2)").arg(it.key()).arg(it.value()),
+                               it.key());
+
+    m_personCombo->blockSignals(false);
+
+    const bool have = m_personCombo->count() > 0;
+    m_prevFaceBtn->setEnabled(have);
+    m_nextFaceBtn->setEnabled(have);
+    if (m_faceJumpInfo)
+        m_faceJumpInfo->setText(have ? QString() : "kayıtta tanınan yüz yok");
+}
+
+void CameraFeed::onPrevFace() { jumpToFace(-1); }
+void CameraFeed::onNextFace() { jumpToFace(+1); }
+
+void CameraFeed::jumpToFace(int dir)
+{
+    if (!m_personCombo || m_personCombo->count() == 0) return;
+    const QString person = m_personCombo->currentData().toString();
+
+    QList<int> idxs;
+    for (const FaceMarker &m : m_faceMarkers)
+        if (m.name == person) idxs.append(m.index);
+    if (idxs.isEmpty()) return;
+    std::sort(idxs.begin(), idxs.end());
+
+    int target = -1;
+    if (dir > 0) {
+        for (int f : idxs) if (f > playbackIndex) { target = f; break; }
+        if (target < 0) target = idxs.first();
+    } else {
+        for (int i = idxs.size() - 1; i >= 0; --i)
+            if (idxs[i] < playbackIndex) { target = idxs[i]; break; }
+        if (target < 0) target = idxs.last();
+    }
+    seekTo(target);
+}
+
+void CameraFeed::seekTo(int index)
+{
+    if (playbackFrames.isEmpty()) return;
+    index = qBound(0, index, playbackFrames.size() - 1);
+
+    playbackTimer->stop();
+    isPaused = true;
+    pauseBtn->setText("▶");
+
+    playbackIndex = index;
+    slider->blockSignals(true);
+    slider->setValue(index);
+    slider->blockSignals(false);
+    showFrame(index);
+
+    if (m_faceJumpInfo) {
+        const int secs = index / 30;
+        m_faceJumpInfo->setText(QString("→ %1:%2")
+                                    .arg(secs / 60, 2, 10, QChar('0'))
+                                    .arg(secs % 60, 2, 10, QChar('0')));
+    }
 }
 
 CameraFeed::~CameraFeed() {}

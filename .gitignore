@@ -1,0 +1,25 @@
+# Qt Creator kişisel ayarlar
+.qtcreator/
+*.pro.user
+*.pro.user.*
+*.autosave
+
+# derleme çıktıları
+build/
+build-*/
+*.o
+*.obj
+*.exe
+*.dll
+*.pdb
+moc_*.cpp
+moc_*.h
+qrc_*.cpp
+ui_*.h
+Makefile
+Makefile.*
+.qmake.stash
+
+# OS
+Thumbs.db
+.DS_Store

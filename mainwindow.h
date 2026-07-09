@@ -30,9 +30,8 @@ public:
 
 private slots:
     void onCameraSelected(int index);
-    void onCamerasChanged();       // USB takma/çıkarma
+    void onCamerasChanged();
 
-    // Yüz tanıma araç çubuğu
     void onFaceToggled(bool on);
     void onEnrollClicked();
     void onManageClicked();
@@ -48,17 +47,16 @@ private:
 
     QTimer             *camChangeDebounce;
 
-    QList<CameraFeed*>  localFeeds;   // PC yerel kameralar
-    QList<CameraFeed*>  udpFeeds;     // Pi UDP kameralar
-    QList<CameraFeed*>  cameraFeeds;  // hepsi birlikte (local + udp)
+    QList<CameraFeed*>  localFeeds;
+    QList<CameraFeed*>  udpFeeds;
+    QList<CameraFeed*>  cameraFeeds;
     QList<QWidget*>     placeholders;
 
-    // ── Yüz tanıma ──────────────────────────────────────────────────────────
     QThread     *m_faceThread   = nullptr;
     FaceEngine  *m_faceEngine   = nullptr;
     QAction     *m_faceToggleAct = nullptr;
-    QStringList  m_knownNames;            // personListReady ile güncellenir
-    int          m_nextFeedId   = 0;      // her feed'e benzersiz id
+    QStringList  m_knownNames;
+    int          m_nextFeedId   = 0;
 
     void setupFaceEngine();
     void setupToolbar();
@@ -70,4 +68,4 @@ private:
     void showSingle(int index);
 };
 
-#endif // MAINWINDOW_H
+#endif

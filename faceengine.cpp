@@ -10,16 +10,13 @@
 
 #include <opencv2/imgproc.hpp>
 
-// ─────────────────────────────────────────────────────────────────────────────
 FaceEngine::FaceEngine(const QString &modelsDir, QObject *parent)
     : QObject(parent)
     , m_modelsDir(modelsDir)
 {
-    // Queued connection'da custom tipleri taşıyabilmek için kayıt
     qRegisterMetaType<FaceResult>("FaceResult");
     qRegisterMetaType<QVector<FaceResult>>("QVector<FaceResult>");
 
-    // Veritabanı, mevcut kayıt klasörünüzle aynı yerde
     m_dbPath = "C:/kamera_proje/faces.json";
 
     m_ready = initModels(modelsDir);
@@ -42,7 +39,6 @@ bool FaceEngine::initModels(const QString &modelsDir)
     }
 
     try {
-        // (model, config, inputSize, scoreThr, nmsThr, topK)  — OpenCV demo ile aynı
         m_detector = cv::FaceDetectorYN::create(
             detPath.toStdString(), "", cv::Size(320, 320),
             0.9f, 0.3f, 5000);
@@ -59,11 +55,9 @@ bool FaceEngine::initModels(const QString &modelsDir)
     return true;
 }
 
-// ─── QImage (RGB) → cv::Mat (BGR) ────────────────────────────────────────────
 cv::Mat FaceEngine::qimageToBgr(const QImage &img)
 {
     QImage rgb = img.convertToFormat(QImage::Format_RGB888);
-    // cv::Mat başlığı QImage tamponuna işaret eder; cvtColor YENİ tampon ayırır.
     cv::Mat mat(rgb.height(), rgb.width(), CV_8UC3,
                 const_cast<uchar*>(rgb.bits()),
                 static_cast<size_t>(rgb.bytesPerLine()));
@@ -95,7 +89,6 @@ cv::Mat FaceEngine::featureFor(const cv::Mat &bgr, const cv::Mat &faceRow)
         qWarning() << "[FaceEngine] feature hatası:" << e.what();
         return cv::Mat();
     }
-    // feature() iç tamponu yeniden kullanır → KLONLAMAK ŞART
     return feature.clone();
 }
 
@@ -122,7 +115,6 @@ void FaceEngine::identify(const cv::Mat &feature, QString &nameOut,
     }
 }
 
-// ─── Canlı tanıma ────────────────────────────────────────────────────────────
 void FaceEngine::processFrame(int feedId, const QImage &frame)
 {
     QVector<FaceResult> results;
@@ -149,7 +141,6 @@ void FaceEngine::processFrame(int feedId, const QImage &frame)
     emit resultsReady(feedId, results);
 }
 
-// ─── Kişi kaydı ──────────────────────────────────────────────────────────────
 void FaceEngine::enrollFace(const QString &name, const QImage &frame)
 {
     if (!m_ready) {
@@ -169,7 +160,6 @@ void FaceEngine::enrollFace(const QString &name, const QImage &frame)
         return;
     }
 
-    // En büyük yüzü seç (w*h)
     int   bestIdx  = 0;
     float bestArea = 0.0f;
     for (int i = 0; i < faces.rows; ++i) {
@@ -183,7 +173,6 @@ void FaceEngine::enrollFace(const QString &name, const QImage &frame)
         return;
     }
 
-    // Aynı isim varsa güncelle, yoksa ekle
     bool updated = false;
     for (auto &p : m_people) {
         if (p.name.compare(trimmed, Qt::CaseInsensitive) == 0) {
@@ -214,7 +203,6 @@ void FaceEngine::removePerson(const QString &name)
     }
 }
 
-// ─── Disk: JSON ──────────────────────────────────────────────────────────────
 void FaceEngine::saveDatabase()
 {
     QJsonArray arr;

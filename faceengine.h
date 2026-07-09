@@ -10,22 +10,16 @@
 #include <QMetaType>
 
 #include <opencv2/core.hpp>
-#include <opencv2/objdetect.hpp>   // FaceDetectorYN, FaceRecognizerSF
+#include <opencv2/objdetect.hpp>
 
-// ─── Tek bir tanıma sonucu (bir yüz kutusu + kime ait olduğu) ────────────────
 struct FaceResult {
-    QRect   box;                 // yüzün görüntüdeki konumu (native çözünürlük)
-    QString name;                // eşleşen kişi adı, yoksa "Bilinmiyor"
-    float   confidence = 0.0f;   // kosinüs benzerliği (0..1, eşleşmede)
-    bool    known = false;       // tanınan biri mi?
+    QRect   box;
+    QString name;
+    float   confidence = 0.0f;
+    bool    known = false;
 };
 Q_DECLARE_METATYPE(FaceResult)
 
-//
-// FaceEngine — TÜM metodları worker thread'de çalışır (moveToThread + queued
-// connection). Bu yüzden m_people'a sadece tek thread eriştiği için mutex'e
-// gerek yoktur. Modeller bir kez (constructor'da) yüklenir.
-//
 class FaceEngine : public QObject
 {
     Q_OBJECT
@@ -36,10 +30,8 @@ public:
     QString lastError() const { return m_lastError; }
 
 public slots:
-    // Kameralardan gelen kare (queued connection ile çağrılır)
     void processFrame(int feedId, const QImage &frame);
 
-    // Kişi kaydı: karedeki EN BÜYÜK yüzü bul, embedding'i isimle sakla
     void enrollFace(const QString &name, const QImage &frame);
 
     void removePerson(const QString &name);
@@ -56,7 +48,7 @@ signals:
 private:
     struct Person {
         QString name;
-        cv::Mat feature;        // 1x128 CV_32F embedding
+        cv::Mat feature;
     };
 
     bool    initModels(const QString &modelsDir);
@@ -70,16 +62,13 @@ private:
     cv::Ptr<cv::FaceDetectorYN>   m_detector;
     cv::Ptr<cv::FaceRecognizerSF> m_recognizer;
 
-    QVector<Person> m_people;   // SADECE worker thread erişir → mutex gerekmez
+    QVector<Person> m_people;
     QString m_modelsDir;
     QString m_dbPath;
     bool    m_ready = false;
     QString m_lastError;
 
-    // SFace kosinüs eşiği: >= eşik ise "aynı kişi" (OpenCV önerisi 0.363).
-    // Kimlik doğrulamada güvenliği artırmak isterseniz 0.40-0.45'e çekin
-    // (yanlış kabul azalır, ama tanıma biraz zorlaşır).
-    static constexpr double COSINE_THRESHOLD = 0.5;
+    static constexpr double COSINE_THRESHOLD = 0.4;
 };
 
-#endif // FACEENGINE_H
+#endif
